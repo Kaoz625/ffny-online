@@ -325,6 +325,33 @@ def test_new_venue(game, data):
     assert "feID 28 is taken" in result["skipped"][0][1]
 
 
+def test_new_venue_camera_bank_symbols_are_renamed():
+    """Studio <= beta.24 copied BT4V03A.viv as BT4V28A.viv with the objects still naming BT4V03A: a BLAZIN' on that
+    venue corrupted the heap (crash after the fight). The composer renames the symbols to the venue's own code."""
+    trailer = b"L231" + struct.pack(">I", 2)
+    old = viv.build_archive([("BT4V28A_EYE.o", b"\x7fELF" + b"\0" * 40 + b"__AnimationBank:::BT4V03A_EYE\0"),
+                             ("BT4V28A_TARGET.o", b"\x7fELF" + b"\0" * 40 + b"__AnimationBank:::BT4V03A_TARGET\0")])
+    fixed = newvenue.repair_camera_bank("BT4V28A.viv", old, "28A")
+    assert len(fixed) == len(old) and b"03A" not in fixed and fixed == old.replace(b"BT4V03A", b"BT4V28A")
+    assert newvenue.repair_camera_bank("BT4V28A.viv", fixed, "28A") == fixed       # right already: unchanged
+    # Studio's layout (alignment 1, no trailer) -> as every retail bank: 128-byte entries, the L231 trailer
+    laid = newvenue.retail_bank_layout(fixed)
+    assert laid == viv.build_archive([(e.name, viv.Archive(fixed).raw(e)) for e in viv.Archive(fixed).entries],
+                                     align=128, trailer=trailer)
+    assert all(e.offset % 128 == 0 for e in viv.Archive(laid).entries)
+    assert newvenue.retail_bank_layout(laid) == laid                                 # retail layout: unchanged
+    assert viv.unwrap(newvenue.retail_bank_layout(viv.refpack_store(fixed))) == laid
+    assert newvenue.retail_bank_layout(b"\x7fELF not an archive") == b"\x7fELF not an archive"
+    wrapped = viv.refpack_store(old)
+    assert viv.unwrap(newvenue.repair_camera_bank("BT4V28A.viv", wrapped, "28A")) == fixed
+    vi = viv.build_archive([("VI_28A11_EYE.o", b"\x7fELF__AnimationBank:::VI_03A11_EYE\0"
+                                               b"__AnimationBank:::VI_03A12_EYE\0")], align=128, trailer=trailer)
+    assert newvenue.repair_camera_bank("VI_28A11.viv", vi, "28A") == vi.replace(b"VI_03A11", b"VI_28A11")
+    # another venue's bank, or a non-bank entry: untouched
+    assert newvenue.repair_camera_bank("BT4V28A.viv", old, "29A") == old
+    assert newvenue.repair_camera_bank("CE_128A.viv", old, "28A") == old
+
+
 
 LOCATOR = b"\x7fELF" + bytes(range(256)) * 40           # a stand-in locator file (10244 bytes)
 CROWD_OP = {"op": "new-venue", "template": "V2BG_03A", "template_code": "03A", "template_fe_id": 3,
@@ -687,3 +714,94 @@ def test_singles_compose_as_before_beside_packs(game, data):
     result = compose(data, game, [first, stale])
     assert result["applied"] == ["body-one"] and [i for i, _ in result["skipped"]] == ["stale"]
     assert "another mod" not in dict(result["skipped"])["stale"]
+
+
+BREAKABLE = b"\x7fELF" + b"__Model:::V2BG_13A_J_branch " * 40       # a stand-in for The Pit's breakable model
+MODELS_OP = dict(CROWD_OP, drop_objects=True, models=["V2BG_28A_Z"])
+del MODELS_OP["crowd_locator"]
+
+
+def breakable_game(game, monkeypatch):
+    """The test game with a retail breakable model V2BG_13A_J.o (synthetic bytes, made the retail ones)."""
+    a = viv.Archive(game / "assets" / "v2bg.viv")
+    rows = [(n, viv.refpack_store(a.read(n))) for n in a.names()] + [("V2BG_13A_J.o", viv.refpack_store(BREAKABLE))]
+    (game / "assets" / "v2bg.viv").write_bytes(viv.build_archive(rows, align=128))
+    monkeypatch.setattr(newvenue, "BREAKABLE_MODELS",
+                        {"V2BG_13A_J.o": (len(BREAKABLE), hashlib.sha256(BREAKABLE).hexdigest())})
+    return game
+
+
+def model_entry(entry="V2BG_28A_Z.o", base_entry="V2BG_13A_J.o", base=BREAKABLE, result=None):
+    made = BREAKABLE.replace(b"V2BG_13A_J", entry[:-2].encode()) + b"crate"
+    return ("assets/v2bg.viv", entry, "add", "assets/v2bg.viv", base_entry, base, made if result is None else result)
+
+
+def test_new_venue_with_a_breakable(game, data, monkeypatch):
+    breakable_game(game, monkeypatch)
+    pack = make_pack(data, "crate", "venue", [model_entry()], [MODELS_OP])
+    result = compose(data, game, [pack])
+    assert result["applied"] == ["crate"], result
+    assert viv.Archive(out(data, "assets/v2bg.viv")).read("V2BG_28A_Z.o") == model_entry()[6]
+    entity = out(data, "assets/entity.xml").read_bytes().decode("latin-1")
+    template, new = entity.split("<name>V2BG_28A</name>", 1)
+    assert "V2BG_28A_Z" not in template
+    # the line FFNY Studio's breakables.add_entity_models writes, before the entity's end
+    assert "\t\t<model>\r\n\t\t\t<name>V2BG_28A_Z</name>\r\n\t\t</model>\r\n\t</entity>" in new
+    assert new.count("<model>") == 2                                 # drop_objects: the main model and the crate
+    assert cc.COMPOSER >= 5
+
+
+def test_new_venue_breakables_are_refused_unless_they_are_its_own_adds(game, data, monkeypatch):
+    breakable_game(game, monkeypatch)
+    plain = {k: v for k, v in MODELS_OP.items() if k != "models"}
+    cases = {
+        "unnamed": ([model_entry()], plain),                                           # added, not named
+        "missing": ([], MODELS_OP),                                                    # named, not added
+        "other": ([model_entry()], dict(MODELS_OP, models=["V2BG_29A_Z"])),           # not its own code
+        "letter": ([model_entry("V2BG_28A_J.o")], dict(MODELS_OP, models=["V2BG_28A_J"])),   # a retail letter
+        "twice": ([model_entry()], dict(MODELS_OP, models=["V2BG_28A_Z", "V2BG_28A_Z"])),
+        "many": ([model_entry()], dict(MODELS_OP, models=["V2BG_28A_%s" % c for c in "OPQRSTUVWXYZ"] + ["V2BG_28A_Z"])),
+        "text": ([model_entry()], dict(MODELS_OP, models="V2BG_28A_Z")),
+        "case": ([model_entry(), model_entry("v2bg_28a_y.o")], MODELS_OP),             # unnamed, another case
+        "base": ([model_entry(base_entry="V2BG_03A.o", base=viv.Archive(game / "assets" / "v2bg.viv").read("V2BG_03A.o"))],
+                 MODELS_OP),                                                           # not from a breakable model
+        "template": ([model_entry()], dict(MODELS_OP, template="V2BG_05A", template_code="05A")),  # 05A has a Z
+        "notelf": ([model_entry(result=b"<xml/>V2BG_28A_Z")], MODELS_OP),
+        "notrenamed": ([model_entry(result=BREAKABLE + b"V2BG_28A_Z")], MODELS_OP),
+    }
+    for order, (pack_id, (entries, op)) in enumerate(sorted(cases.items()), 1):
+        pack = make_pack(data, pack_id, "venue", entries, [op], order=order)
+        result = compose(data, game, [pack])
+        assert result["applied"] == [] and result["skipped"][0][0] == pack_id, (pack_id, result)
+    # not the game's own V2BG_13A_J.o: the retail hash does not match
+    monkeypatch.setattr(newvenue, "BREAKABLE_MODELS", {"V2BG_13A_J.o": (35872, "ab" * 32)})
+    pack = make_pack(data, "notretail", "venue", [model_entry()], [MODELS_OP], order=30)
+    result = compose(data, game, [pack])
+    assert result["applied"] == [] and "game's own breakable model" in result["skipped"][0][1]
+
+
+def test_template_stage_model_copy_is_not_a_breakable(game, data, monkeypatch):
+    """A copy of a venue with its own stage model Z (The Dragon House's V2BG_05A_Z.o) adds V2BG_28A_Z.o from it
+    without naming it in models."""
+    breakable_game(game, monkeypatch)
+    op = {k: v for k, v in MODELS_OP.items() if k != "models"}
+    entries = [model_entry(base_entry="V2BG_05A_Z.o")]
+    assert newvenue.check_models(dict(op, template="V2BG_05A", template_code="05A"),
+                                 [dict(archive=e[0], entry=e[1], mode=e[2], base_archive=e[3], base_entry=e[4])
+                                  for e in entries]) == {}
+
+
+def test_validate_install_asks_for_venue_models_v1(tmp_path):
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import test_mod_manager  # noqa: E402  (the loaded mods module)
+    sys.path.pop(0)
+    mods = test_mod_manager.mods
+    folder = tmp_path / "pack"
+    (folder / "deltas").mkdir(parents=True)
+    (folder / "install.json").write_text(json.dumps({"schema": 1, "type": "venue", "entries": [],
+                                                     "ops": [MODELS_OP]}), encoding="utf-8")
+    assert mods.validate_install(folder)["capabilities"] == ["content-v1", "venue-models-v1"]
+    (folder / "install.json").write_text(json.dumps({"schema": 1, "type": "venue", "entries": [],
+                                                     "ops": [{k: v for k, v in MODELS_OP.items() if k != "models"}]}),
+                                         encoding="utf-8")
+    assert mods.validate_install(folder)["capabilities"] == ["content-v1"]
