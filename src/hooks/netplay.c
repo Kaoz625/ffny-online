@@ -76,6 +76,27 @@
 int netplay_host(const char *s, const char *n, int d) { (void)s; (void)n; (void)d; return -1; }
 int netplay_join(const char *s, const char *n, const char *r) { (void)s; (void)n; (void)r; return -1; }
 void netplay_stop(void) {}
+/* blz/mac: two netplay.c functions other files call, defined only in the Windows half. */
+int netplay_rerunning(void) { return 0; }
+extern BOOL (*g_xbox_game_file_redirect)(const char *relative, char *host_path, DWORD size);
+FILE *netplay_open_fight_file(const char *name, int *overridden)
+{
+    const char *data = getenv("DEFJAM_DATA");
+    char path[1024];
+    FILE *f = NULL;
+    *overridden = 0;
+    if (g_xbox_game_file_redirect && g_xbox_game_file_redirect(name, path, (DWORD)sizeof(path)) && (f = fopen(path, "rb")) != NULL)
+        *overridden = 1;
+    if (!f && data && *data) {
+        snprintf(path, sizeof(path), "%s/override/%s", data, name);
+        if ((f = fopen(path, "rb")) != NULL) *overridden = 1;
+    }
+    if (!f) {
+        snprintf(path, sizeof(path), "game/%s", name);
+        f = fopen(path, "rb");
+    }
+    return f;
+}
 enum NetplayState netplay_state(void) { return NETPLAY_OFF; }
 void netplay_status(char *t, int size) { if (size > 0) snprintf(t, (size_t)size, "Online play is Windows only for now."); }
 void netplay_room(char *c, int size) { if (size > 0) c[0] = 0; }

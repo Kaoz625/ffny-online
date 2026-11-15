@@ -29,6 +29,11 @@
 #include <ctype.h>
 #include "recomp/gen/recomp_types.h"
 #include "created_fighter.h"
+#if !defined(_WIN32)
+#include <dirent.h>
+#include <sys/stat.h>
+#include <time.h>
+#endif
 
 int automatch_queue_fe(const char *command);     /* automatch.c: a front-end call at the next call */
 FILE *netplay_open_fight_file(const char *name, int *overridden);  /* netplay.c: as the print reads it */
@@ -506,8 +511,18 @@ static int profile_from_file(const char *path, uint8_t *profile, FILETIME *when)
     else got = 0;
     fclose(f);
     if (got && when) {
+#if defined(_WIN32)
         WIN32_FILE_ATTRIBUTE_DATA a;
         if (GetFileAttributesExA(path, GetFileExInfoStandard, &a)) *when = a.ftLastWriteTime;
+#else
+        /* POSIX (blz/mac): the modification time as a FILETIME (100 ns since 1601). */
+        struct stat st;
+        if (stat(path, &st) == 0) {
+            ULONGLONG t = ((ULONGLONG)st.st_mtime + 11644473600ULL) * 10000000ULL;
+            when->dwLowDateTime = (DWORD)t;
+            when->dwHighDateTime = (DWORD)(t >> 32);
+        }
+#endif
     }
     return (int)got;
 }
@@ -544,8 +559,18 @@ static void local_add(const uint8_t rec[CP_REC_LEN], const char *key, ULONGLONG 
         SYSTEMTIME st;
         ft.dwLowDateTime = (DWORD)when;
         ft.dwHighDateTime = (DWORD)(when >> 32);
+#if defined(_WIN32)
         if (FileTimeToLocalFileTime(&ft, &lt) && FileTimeToSystemTime(&lt, &st))
             snprintf(e->saved, sizeof(e->saved), "%04u-%02u-%02u %02u:%02u", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
+#else
+        {
+            time_t u = (time_t)(when / 10000000ULL - 11644473600ULL);
+            struct tm tmv;
+            (void)ft; (void)lt; (void)st;
+            if (localtime_r(&u, &tmv))
+                strftime(e->saved, sizeof(e->saved), "%Y-%m-%d %H:%M", &tmv);
+        }
+#endif
     }
 }
 
@@ -577,6 +602,7 @@ static void read_test_records(const char *list)
  * and the pick stay with it: "<folder>~2" is the second of one folder put aside. Such a record is the
  * file's own bytes, played like an opponent's: into a spare or borrowed profile slot for the match
  * only (created_fighter_inject), never written to the save area or into the game's user ID list. */
+#if defined(_WIN32)
 static void read_folder_of_user_ids(const char *root, int stash)
 {
     static uint8_t profile[PROFILE_SIZE];
@@ -621,6 +647,57 @@ static void read_folder_of_user_ids(const char *root, int stash)
     } while (FindNextFileA(h, &dir));
     FindClose(h);
 }
+
+#else
+static void read_folder_of_user_ids(const char *root, int stash)
+{
+    /* POSIX (blz/mac): the same walk as the Windows one with opendir/stat. */
+    static uint8_t profile[PROFILE_SIZE];
+    uint8_t rec[CP_REC_LEN];
+    DIR *h = opendir(root);
+    struct dirent *dir;
+    if (!h) return;
+    while ((dir = readdir(h)) != NULL) {
+        char outer[MAX_PATH], folder[MAX_PATH], *tilde;
+        struct stat st;
+        DIR *g;
+        struct dirent *file;
+        if (dir->d_name[0] == '.') continue;
+        snprintf(outer, sizeof(outer), "%s/%s", root, dir->d_name);
+        if (lstat(outer, &st) != 0) continue;
+        if (stash && S_ISLNK(st.st_mode)) continue;
+        if (stat(outer, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        snprintf(folder, sizeof(folder), "%s", dir->d_name);
+        if (stash && (tilde = strchr(folder, '~')) != NULL) *tilde = 0;
+        g = opendir(outer);
+        if (!g) continue;
+        while ((file = readdir(g)) != NULL) {
+            char path[MAX_PATH], key[sizeof(g_local[0].key)];
+            FILETIME when = { 0, 0 };
+            uint8_t ok[CP_REC_LEN];
+            struct stat fs;
+            int i, dup = 0;
+            if (file->d_name[0] == '.') continue;
+            snprintf(path, sizeof(path), "%s/%s", outer, file->d_name);
+            if (stat(path, &fs) != 0 || !S_ISREG(fs.st_mode) || fs.st_size != SAVE_FILE_SIZE) continue;
+            if (!profile_from_file(path, profile, &when) || profile[0x4D8A] != 1) continue;
+            cp_record_from_profile(profile, rec);
+            if (!cp_record_sanitize(rec, ok)) continue;
+            snprintf(key, sizeof(key), "%s/%s", folder, file->d_name);
+            for (i = 0; i < g_local_count; i++)
+                if (!strcmp(g_local[i].key, key)) dup = 1;
+            if (dup) {
+                fprintf(stderr, "[CREATED] %s put aside has the key of a fighter listed already: not listed\n", path);
+                continue;
+            }
+            local_add(ok, key, ft64(when), 1);
+        }
+        closedir(g);
+    }
+    closedir(h);
+}
+
+#endif
 
 static void read_local(void)
 {
