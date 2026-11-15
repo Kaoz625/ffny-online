@@ -17,6 +17,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#if defined(__APPLE__)
+/* [blz/mac] macOS has memset_s (C11 Annex K), not explicit_bzero. */
+#define __STDC_WANT_LIB_EXT1__ 1
+#include <string.h>
+static inline void explicit_bzero(void *p, size_t n) { memset_s(p, n, 0, n); }
+#endif
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN

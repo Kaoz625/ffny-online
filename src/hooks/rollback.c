@@ -29,8 +29,22 @@
 #if defined(_WIN32)
 #include <intrin.h>
 #else
-#include <x86intrin.h>      /* __rdtsc */
 #include <unistd.h>
+#include <time.h>
+/* [blz/mac] POSIX (arm64 too): the mixer's wall clock and its own thread time in one unit,
+ * nanoseconds, in place of __rdtsc and QueryThreadCycleTime (which are x86/Windows). */
+static inline unsigned long long blz_ns(clockid_t c) { struct timespec t; clock_gettime(c, &t); return (unsigned long long)t.tv_sec * 1000000000ull + (unsigned long long)t.tv_nsec; }
+#define __rdtsc() blz_ns(CLOCK_MONOTONIC)
+#define QueryThreadCycleTime(thread, out) ((void)(thread), *(out) = blz_ns(CLOCK_THREAD_CPUTIME_ID), 1)
+#ifndef PAGE_GUARD
+#define PAGE_GUARD 0x100
+#endif
+#ifndef THREAD_QUERY_LIMITED_INFORMATION
+#define THREAD_QUERY_LIMITED_INFORMATION 0x0800
+#endif
+#define GetCurrentProcessorNumber() 0u        /* only a statistic in rollback.c */
+#define InterlockedExchange8(p, v) __atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST)
+#define OpenThread(access, inherit, tid) ((void)(access), (void)(inherit), (void)(tid), (HANDLE)1)
 #endif
 #include <stdio.h>
 #include <stdlib.h>
@@ -165,6 +179,11 @@ static _Thread_local int t_in_sound;
 #endif   /* this thread is inside a sound engine command */
 static volatile LONG s_foreign;
 extern void (*xbox_guest_write_notify)(void *host, size_t length);
+#if !defined(_WIN32)
+/* [blz/mac] the toolkit defines this only in its Win32 read path; N4ML355's POSIX change to
+ * kernel_file.c is not in the submodule. Defined here so POSIX links (no notifications yet). */
+void (*xbox_guest_write_notify)(void *host, size_t length) = NULL;
+#endif
 static int s_audio_state;               /* 0 before, 1 during, 2 after the audio start-up */
 
 /* The arena grows in pieces as the sound side asks: it shares the 64 MiB contiguous window with the
@@ -553,7 +572,13 @@ static int arena_watch_fault(uintptr_t host);
 
 static LONG CALLBACK track_fault(PEXCEPTION_POINTERS e)
 {
+#if defined(__APPLE__)
+    /* [blz/mac] the compat layer's PEXCEPTION_POINTERS is opaque on macOS (a struct on Linux); the
+     * POSIX VEH shim never calls this handler, the layout only has to compile. */
+    const EXCEPTION_RECORD *r = ((struct { PEXCEPTION_RECORD ExceptionRecord; void *ContextRecord; } *)e)->ExceptionRecord;
+#else
     const EXCEPTION_RECORD *r = e->ExceptionRecord;
+#endif
     uintptr_t lo = (uintptr_t)page_host(0), a;
     uint32_t p;
     if (r->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || r->NumberParameters < 2) return EXCEPTION_CONTINUE_SEARCH;
