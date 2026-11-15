@@ -369,6 +369,7 @@ static int program_dir(char *out, size_t size)
 #include <sys/stat.h>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
+#include <TargetConditionals.h>
 #endif
 
 static int file_exists(const char *path)
@@ -849,6 +850,9 @@ static void run_launcher_if_wanted(void)
                    getenv("RECOMP_HEADLESS") != NULL;
     int force = has_arg("--launcher");
     int no = has_arg("--no-launcher");
+#if defined(__APPLE__) && TARGET_OS_IOS
+    no = 1;   /* iOS: straight into the game; settings live in the in-game overlay */
+#endif
 
     /* Nothing to show it in without a display; the game itself then runs off screen. */
     if (!host_posix_have_video())

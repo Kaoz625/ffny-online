@@ -185,7 +185,11 @@ if(DEFJAM_BUILD_GAME)
         # in pc_ui.cpp; pc_launcher.cpp is the Direct3D 11 one.
         list(FILTER HOOK_SOURCES EXCLUDE REGEX "/(watchpoint\\.c|pc_launcher\\.cpp)$")
         set(HOST_SOURCES src/host_posix.c src/host_posix_keys.c)
-        if(APPLE)
+        if(IOS)
+            enable_language(OBJC)
+            list(APPEND HOST_SOURCES src/host_ios.m)
+            set_source_files_properties(src/host_ios.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+        elseif(APPLE)
             enable_language(OBJC)
             list(APPEND HOST_SOURCES src/host_macos.m)
         endif()
@@ -218,7 +222,22 @@ if(DEFJAM_BUILD_GAME)
         find_package(OpenSSL REQUIRED)      # the online layer's HTTPS (src/hooks/account.c)
         target_link_libraries(${PROJECT_NAME} PRIVATE xboxrecomp recomp_settings defjam_imgui
                               SDL3::SDL3 Vulkan::Vulkan OpenSSL::SSL OpenSSL::Crypto ${CMAKE_DL_LIBS} m)
-        if(APPLE)
+        if(IOS)
+            # MoltenVK is linked statically (Vulkan::Vulkan is its static library) and SDL3 is static.
+            target_link_libraries(${PROJECT_NAME} PRIVATE "-framework Foundation" "-framework UIKit"
+                "-framework Metal" "-framework QuartzCore" "-framework IOSurface" "-framework IOKit"
+                "-framework CoreGraphics" "-framework GameController" "-framework CoreHaptics"
+                "-framework CoreMotion" "-framework AVFoundation" "-framework AudioToolbox"
+                "-framework CoreAudio" "-framework CoreBluetooth" "-framework UniformTypeIdentifiers"
+                "-framework Security" c++)
+            set_target_properties(${PROJECT_NAME} PROPERTIES
+                MACOSX_BUNDLE ON
+                MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in"
+                MACOSX_BUNDLE_GUI_IDENTIFIER "com.nyctailblazers.ffnyonline"
+                MACOSX_BUNDLE_BUNDLE_NAME "FFNY Online"
+                MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
+                MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
+        elseif(APPLE)
             # Shift held at start-up (src/host_posix.c) is read from the window server.
             target_link_libraries(${PROJECT_NAME} PRIVATE "-framework ApplicationServices" "-framework AppKit")
             # SDL opens the Vulkan loader by name, and macOS's search does not

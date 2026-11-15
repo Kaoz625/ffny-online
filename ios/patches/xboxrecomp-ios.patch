@@ -1,0 +1,85 @@
+diff --git a/src/nv2a/texture_pack.c b/src/nv2a/texture_pack.c
+index ac54ccb..b174391 100644
+--- a/src/nv2a/texture_pack.c
++++ b/src/nv2a/texture_pack.c
+@@ -1112,7 +1112,7 @@ static void host_shutdown(void)
+ #endif
+ #if defined(__APPLE__)
+ #include <mach/mach.h>
+-#include <mach/mach_vm.h>
++#include "../platform/mach_vm_compat.h"
+ #endif
+ 
+ static ULONGLONG now_ms(void)
+diff --git a/src/platform/mach_vm_compat.h b/src/platform/mach_vm_compat.h
+new file mode 100644
+index 0000000..c16bcf5
+--- /dev/null
++++ b/src/platform/mach_vm_compat.h
+@@ -0,0 +1,22 @@
++/* <mach/mach_vm.h> is "unsupported" in the iOS SDK, but the same calls exist there as the
++ * vm_* routines of <mach/vm_map.h> (64-bit wide on arm64). blz/ios (Kaoz625). */
++#pragma once
++#include <TargetConditionals.h>
++#if TARGET_OS_IOS || TARGET_OS_TV
++#include <mach/mach.h>
++#include <mach/vm_map.h>
++static inline kern_return_t mach_vm_map(vm_map_t t, mach_vm_address_t *a, mach_vm_size_t s, mach_vm_offset_t m,
++    int f, mem_entry_name_port_t o, memory_object_offset_t off, boolean_t c, vm_prot_t cur, vm_prot_t max, vm_inherit_t i)
++{ vm_address_t v = (vm_address_t)*a; kern_return_t r = vm_map(t, &v, (vm_size_t)s, (vm_address_t)m, f, o, (vm_offset_t)off, c, cur, max, i); *a = v; return r; }
++static inline kern_return_t mach_vm_remap(vm_map_t t, mach_vm_address_t *a, mach_vm_size_t s, mach_vm_offset_t m,
++    int f, vm_map_t src, mach_vm_address_t sa, boolean_t c, vm_prot_t *cur, vm_prot_t *max, vm_inherit_t i)
++{ vm_address_t v = (vm_address_t)*a; kern_return_t r = vm_remap(t, &v, (vm_size_t)s, (vm_address_t)m, f, src, (vm_address_t)sa, c, cur, max, i); *a = v; return r; }
++static inline kern_return_t mach_vm_read_overwrite(vm_map_t t, mach_vm_address_t a, mach_vm_size_t s,
++    mach_vm_address_t d, mach_vm_size_t *out)
++{ vm_size_t n = 0; kern_return_t r = vm_read_overwrite(t, (vm_address_t)a, (vm_size_t)s, (vm_address_t)d, &n); if (out) *out = n; return r; }
++static inline kern_return_t mach_vm_region(vm_map_t t, mach_vm_address_t *a, mach_vm_size_t *s, vm_region_flavor_t f,
++    vm_region_info_t info, mach_msg_type_number_t *cnt, mach_port_t *obj)
++{ vm_address_t v = (vm_address_t)*a; vm_size_t z = 0; kern_return_t r = vm_region_64(t, &v, &z, f, info, cnt, obj); *a = v; *s = z; return r; }
++#else
++#include <mach/mach_vm.h>
++#endif
+diff --git a/src/platform/mmio_trap.c b/src/platform/mmio_trap.c
+index ea0faac..976c414 100644
+--- a/src/platform/mmio_trap.c
++++ b/src/platform/mmio_trap.c
+@@ -25,7 +25,7 @@
+ 
+ #if defined(__APPLE__)
+ #include <mach/mach.h>
+-#include <mach/mach_vm.h>
++#include "mach_vm_compat.h"
+ #endif
+ 
+ #define MMIO_TRAP_MAX 32
+diff --git a/src/platform/win32_compat.c b/src/platform/win32_compat.c
+index 0bc888d..1395399 100644
+--- a/src/platform/win32_compat.c
++++ b/src/platform/win32_compat.c
+@@ -35,7 +35,7 @@
+ #include <sys/sysctl.h>
+ #include <sys/stat.h>
+ #include <mach/mach.h>
+-#include <mach/mach_vm.h>
++#include "mach_vm_compat.h"
+ #include <mach/thread_switch.h>
+ #include <pthread/qos.h>
+ #else
+@@ -2764,7 +2764,16 @@ static int anon_map_fd(const char *name)
+     const char *base = name ? name : "xbox_map";
+     snprintf(shm_name, sizeof(shm_name), "/%.12s_%d_%ld", base, (int)getpid(), (long)seq);
+     int fd = shm_open(shm_name, O_CREAT | O_RDWR | O_EXCL, 0600);
+-    if (fd >= 0) shm_unlink(shm_name);
++    if (fd >= 0) { shm_unlink(shm_name); return fd; }
++    /* iOS: the app sandbox refuses POSIX shared memory; an unlinked file in
++     * the app's own temporary folder maps the same way. */
++    {
++        const char *tmp = getenv("TMPDIR");
++        char path[1024];
++        snprintf(path, sizeof(path), "%s/%s_XXXXXX", tmp && *tmp ? tmp : "/tmp", shm_name + 1);
++        fd = mkstemp(path);
++        if (fd >= 0) unlink(path);
++    }
+     return fd;
+ #else
+     return memfd_create(name ? name : "xbox_map", 0);

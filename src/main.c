@@ -1091,8 +1091,20 @@ static BOOL load_xbe(const char *path, void **out_data, size_t *out_size)
 }
 
 /* Console entry point (for debugging -- lets you see printf output) */
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+#if defined(__APPLE__) && TARGET_OS_IOS
+/* iOS: SDL supplies main() (UIApplicationMain) and calls this one as SDL_main. */
+#include <SDL3/SDL_main.h>
+#endif
 int main(int argc, char **argv)
 {
+#if defined(__APPLE__) && TARGET_OS_IOS
+    /* SDL's UIKit start-up moves the working folder into the app bundle; the game, its
+     * settings, saves and logs live in Documents (src/host_ios.m set DEFJAM_DATA to it). */
+    if (getenv("DEFJAM_DATA")) chdir(getenv("DEFJAM_DATA"));
+#endif
 #if defined(_WIN32)
     (void)argc;
     (void)argv;

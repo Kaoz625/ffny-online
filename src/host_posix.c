@@ -25,7 +25,10 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
 #ifdef __APPLE__
+#include <TargetConditionals.h>
+#if !TARGET_OS_IOS
 #include <ApplicationServices/ApplicationServices.h>
+#endif
 #endif
 
 #include "app_icon_rgba.h"   /* generated from branding/icon/window (cmake/app_icon.cmake) */
@@ -106,7 +109,7 @@ typedef struct { int w, h; } DisplaySize;
 static void display_size_main(void *arg)
 {
     DisplaySize *d = arg;
-#ifdef __APPLE__
+#if defined(__APPLE__) && !TARGET_OS_IOS
     /* Fullscreen Cocoa content excludes the camera/menu strip on notched
      * screens. Use that screen shape in windowed mode too: the canvas is fixed
      * for the run, so entering fullscreen later must keep the same framing. */
@@ -137,7 +140,9 @@ int host_posix_display_size(int *w, int *h)
  * it is held at start-up. */
 int host_posix_shift_held(void)
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) && TARGET_OS_IOS
+    return 0;                                   /* no keyboard Shift at start-up on iOS */
+#elif defined(__APPLE__)
     return (CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState) & kCGEventFlagMaskShift) != 0;
 #else
     return s_have_video && (SDL_GetModState() & SDL_KMOD_SHIFT) != 0;
@@ -154,7 +159,11 @@ static void make_window_main(void *arg)
 
     s_window = SDL_CreateWindow(r->title, r->w, r->h,
                                 SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE
-                                | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+                                | SDL_WINDOW_HIGH_PIXEL_DENSITY
+#if defined(__APPLE__) && TARGET_OS_IOS
+                                | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_BORDERLESS
+#endif
+                                );
     if (!s_window) {
         fprintf(stderr, "[HOST] no window: %s\n", SDL_GetError());
         return;
@@ -177,6 +186,12 @@ static void make_window_main(void *arg)
         return;
     }
     refresh_drawable();
+#if defined(__APPLE__) && TARGET_OS_IOS
+    {   /* The touch controls over the game's view (src/host_ios.m). */
+        extern void host_ios_window_made(SDL_Window *window);
+        host_ios_window_made(s_window);
+    }
+#endif
 }
 
 typedef struct { void *instance; void *surface; int ok; } SurfaceRequest;
