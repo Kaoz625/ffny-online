@@ -44,6 +44,7 @@
 #include "pc_content.h"
 #include "patches/widescreen.h"
 #include "patches/picture.h"
+#include "patches/cheats.h"
 
 /* Picture shape: the console's 4:3, stretched, or widescreen (docs/widescreen); the widescreen
  * choices are indices 2.. and are read once at start-up (src/patches/widescreen.c). */
@@ -248,7 +249,8 @@ static RecompSetting g_display_settings[] = {
 
 /* The display table followed by the input tables (pc_input.c): one array, one
  * registration, one file. */
-static RecompSetting g_settings[DISPLAY_SETTING_COUNT + 64 + 16 + 16 + 4];
+/* + [language]/[content] (5) and [cheats] (5). */
+static RecompSetting g_settings[DISPLAY_SETTING_COUNT + 64 + 16 + 16 + 5 + 8];
 static size_t g_setting_count;
 
 static char g_path[MAX_PATH * 4];   /* empty: do not load or save */
@@ -541,6 +543,7 @@ void pc_settings_apply_display(void)
     }
     d3d8_present_set_vsync(pc_display("vsync", 1));
     picture_apply_settings();
+    cheats_apply_settings();      /* [cheats]: settings.ini or RECOMP_CHEAT_*; refused online */
 #if defined(_WIN32)
     /* Direct3D 11 only for now; the Vulkan renderer keeps its plain scale. */
     d3d8_present_set_post(pc_display("anti_aliasing", 1), pc_display("sharpen", 30));
@@ -645,8 +648,34 @@ static int has_arg(const char *flag)
  * and exits. The first process holds a named mutex for its whole life; the game process the
  * launcher starts (--launcher-child) runs under its launcher's. Test runs start several copies
  * (the two-copy online tests): a copy may run beside another only when it is a test run whose
- * every server address is this machine, so it can never reach the live servers. */
+ * every server address is this machine, so it can never reach the live servers.
+ * The mutex is one per data folder (build 83): its name carries a hash of the data folder's full
+ * path, so a copy with another data root (a developer's or an agent's test install) never blocks
+ * the player's launcher, and two starts of the same install still meet. */
 static HANDLE g_single_instance;
+
+/* "Local\FFNY-Online-running-<16 hex>": FNV-1a 64 of the data folder (else the program's folder),
+ * full path, lower case, without a trailing separator. */
+static void instance_mutex_name(const char *root, WCHAR *out, size_t size)
+{
+    char folder[MAX_PATH * 4], full[MAX_PATH * 4];
+    unsigned long long h = 1469598103934665603ULL;
+    size_t i, n;
+    if (root && *root) snprintf(folder, sizeof folder, "%s", root);
+    else if (!GetModuleFileNameA(NULL, folder, sizeof folder)) folder[0] = 0;
+    else { char *slash = strrchr(folder, '\\'); if (slash) *slash = 0; }
+    if (!GetFullPathNameA(folder, sizeof full, full, NULL)) snprintf(full, sizeof full, "%s", folder);
+    n = strlen(full);
+    while (n > 3 && (full[n - 1] == '\\' || full[n - 1] == '/')) full[--n] = 0;
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)full[i];
+        if (c == '/') c = '\\';
+        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c - 'A' + 'a');
+        h = (h ^ c) * 1099511628211ULL;
+    }
+    swprintf(out, size, L"Local\\FFNY-Online-running-%016llx", h);
+    out[size - 1] = 0;
+}
 
 static int local_address(const char *v)
 {
@@ -692,13 +721,15 @@ static BOOL CALLBACK find_running(HWND w, LPARAM out)
     return TRUE;
 }
 
-static void one_instance_only(void)
+static void one_instance_only(const char *root)
 {
     const char *cmd = GetCommandLineA();
     HWND running = NULL;
+    WCHAR name[96];
     if (cmd && strstr(cmd, "--launcher-child")) return;     /* the launcher holds it for us */
     if (may_run_beside_another()) return;
-    g_single_instance = CreateMutexW(NULL, FALSE, L"Local\\FFNY-Online-running");
+    instance_mutex_name(root, name, sizeof name / sizeof name[0]);
+    g_single_instance = CreateMutexW(NULL, FALSE, name);
     if (!g_single_instance || GetLastError() != ERROR_ALREADY_EXISTS) return;
     fprintf(stderr, "[UI] FFNY Online is already running: showing it, this copy exits\n");
     fflush(stderr);
@@ -985,7 +1016,10 @@ int pc_settings_init(void)
         pc_input_settings(g_settings + DISPLAY_SETTING_COUNT, 64);
     g_setting_count += pc_ui_settings(g_settings + g_setting_count, 16);
     g_setting_count += pc_debug_settings(g_settings + g_setting_count, 16);
-    g_setting_count += pc_language_settings(g_settings + g_setting_count, 4);
+    g_setting_count += pc_language_settings(g_settings + g_setting_count, 5);
+    /* [cheats] was registered by the app only (pc_settings_catalog.c), so in the game every cheat read its
+     * default and the cheats did nothing (build 82). tests/unit/test_settings_registered.py */
+    g_setting_count += cheats_settings(g_settings + g_setting_count, 8);
     recomp_settings_register(g_settings, g_setting_count);
     recomp_settings_set_log(settings_log);
     read = g_path[0] ? recomp_settings_load(g_path) : 0;
@@ -1033,7 +1067,7 @@ int pc_settings_init(void)
         fprintf(stderr, "[SETTINGS] no data folder found; saves use the runtime's default location\n");
     check_started_outside_launcher(have_root);
 #if defined(_WIN32)
-    one_instance_only();        /* before the controllers and the launcher */
+    one_instance_only(have_root ? root : NULL);     /* before the controllers and the launcher */
 #endif
 
     pc_input_start();

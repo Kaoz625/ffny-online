@@ -40,6 +40,15 @@ pack, or one of the two without the other, skips the pack (`ffnycontent/newvenue
 up to build 79 ignore the field: the venue installs and the copy keeps the template's far crowd (drawn only,
 never in the fight).
 
+A new venue may carry breakable objects (FFNY Studio beta.24): the op's optional `"models": ["V2BG_<code>_Z", ...]`
+(1 to 12, letters O..Z that the template's own stage models do not use) and, for each, the `add` of
+`assets/v2bg.viv|<model>.o` from the game's own breakable model `V2BG_13A_J.o` (its retail SHA-256), an ELF file
+renamed to the model. The new entity gets a `<model>` line for each, after the template's (the game draws no stage
+model its entity does not list). Any other `v2bg.viv` add named `V2BG_<code>_<O..Z>.o`, except the template's own
+stage model copied under the new code, skips the pack (`check_models`, `check_model`). The catalogue lists such a
+pack with `venue-models-v1` as well, which launchers from build 83 pass (`pc_mods.cpp`); older ones skip it (they
+ignored the field and would not draw the objects). Composer 5.
+
 On the player's PC the base of a path is `<data>/override/<path>` when it exists, else the dump
 (`--game-dir`, default `<data>/extracted`, else `./game`; the launcher passes its `game` junction resolved).
 Packs apply in catalogue order, minus replacements switched off; ops first, then entries. A pack whose delta
@@ -97,6 +106,38 @@ revisions: a cached revision of another file is not "changed without a new revis
 
 A relay before this branch refuses the longer HELLO; it is sent only by a PC with `content` packs, so the relay
 goes out first. The relay answers a code join between different content sets with ERROR 15 (14 is the relay's "client not supported").
+
+## The player's own packs (FFNY Studio, "Use in my game")
+
+Modders play their packs in Story and Battle, not only in Studio's Test in a fight: new clothing, venue edits,
+and also retextures of standard fighters and edits of standard venues, which are never submitted (online packs
+only add new content) but are fine on their own PC. Studio's **Use in my game** (the Packs page and the editors'
+headers) builds the project's package and unpacks it into `<data>/mods/my-<pack id>` with a `local.json`
+(`{"schema": 1, "source": "ffny-studio", "pack_id", "name", "kind", "type", "version", "author", "description",
+"project", "fighter_fe_id"?}`), then runs this install's `setup/mods.py compose`; **Remove from my game** deletes
+the folder and composes again. The `my-` prefix never takes a community pack's id.
+
+- `mods.py` (`local_packs`): every folder of `<data>/mods` with a `local.json` that `state.json` does not own.
+  They apply after every community pack (order from `LOCAL_ORDER`), are left out while switched off
+  (`settings.ini [content] off`, as a replacement, whatever their kind), and their content hash is computed from
+  their files. `compose` (also the `compose` command, which now rewrites content.ini first, and a sync without a
+  catalogue) takes them; `content.ini` lists them with `local=1` and `online_ok`.
+- **Online.** A local pack never counts in the online content print. `online_ok=1` only for a pack that changes
+  only how things look: no `install.json` (a texture pack through the texture loader; a language pack, whose
+  rebuilt fight files would change the fight-files print anyway), or an `install.json` with no ops whose every
+  entry replaces a `*.xsh` (texture) entry of a `.viv` with its own base (`local_online_safe`). Everything else
+  (new clothing, venues, fighters; models, collision, placements, lights) is offline only: while one is on,
+  `netplay.c`'s start refuses every online start (hub, room, code) with `PC_CONTENT_LOCAL_LINE`, "Your own packs
+  are on: they work offline only. Turn them off in the launcher (Content) to play online.", and logs
+  `[NETPLAY] refused: the player's own packs are on (<names>)`. No silent mismatch: the PC never meets others with
+  files they lack. Retextures may stay on online: textures never reach the simulation, and the fight files
+  (`k_fight_files`) are printed separately anyway.
+- Launcher, Content page, Installed tab: **MY PACKS** below the community packs, one card each with Offline only /
+  Online too and an On/Off switch (composes again at once); while an offline-only pack is on, the line above and
+  **Turn them off**, which switches every offline-only pack off.
+- New fighters: Studio picks a free place (100..127, not used by community or own packs or the game) and writes it
+  as `fighter_fe_id` in local.json; a new venue keeps the fe_id of its op (a clash with a community venue skips the
+  own pack, listed as not applied).
 
 ## Packs of several mods (bundles)
 
