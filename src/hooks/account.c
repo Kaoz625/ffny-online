@@ -810,6 +810,8 @@ int account_download(const char *path, unsigned long long from, int (*sink)(void
                      void *ctx, int *partial)
 { (void)path; (void)from; (void)sink; (void)ctx; if (partial) *partial = 0; return -1; }
 int account_test_server_local(void) { return 0; }
+int account_fetch(const char *path, void *buf, int size, int *len)
+{ (void)path; (void)buf; (void)size; if (len) *len = 0; return -1; }
 int account_send_bug_report(const char *ctype, const void *body, int len, char *out, int size)
 { (void)ctype; (void)body; (void)len; if (size > 0) out[0] = 0; return 0; }
 int account_send_report_note(const char *ctype, const void *body, int len, char *out, int size)
