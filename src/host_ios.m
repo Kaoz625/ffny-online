@@ -30,6 +30,16 @@ __attribute__((constructor)) static void defjam_ios_folders(void)
                 symlink(bundled.fileSystemRepresentation, "game");
             }
         }
+        {   /* FFNY Online reads its build number from config/remaster-version.txt (the online
+             * fingerprint): the bundle carries config/, Documents points at it. */
+            struct stat st;
+            NSString *cfg = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"config"];
+            if (stat("config/remaster-version.txt", &st) != 0 &&
+                stat([cfg stringByAppendingPathComponent:@"remaster-version.txt"].fileSystemRepresentation, &st) == 0) {
+                unlink("config");
+                symlink(cfg.fileSystemRepresentation, "config");
+            }
+        }
         if (!getenv("DEFJAM_DATA")) setenv("DEFJAM_DATA", path, 1);
         /* No keyboard player on a phone: the touch pad (or a real controller) is player 1. */
         setenv("RECOMP_KEYBOARD_PLAYER", "off", 0);

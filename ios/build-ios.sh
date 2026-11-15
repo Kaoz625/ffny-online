@@ -21,3 +21,5 @@ cmake -S . -B build/ios -G Ninja \
   -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
   -DDEFJAM_BUILD_APP=OFF
 cmake --build build/ios
+# FFNY Online: the build number file the online fingerprint reads (src/hooks/updater.c).
+mkdir -p build/ios/defjam_recomp.app/config && cp config/remaster-version.txt build/ios/defjam_recomp.app/config/
