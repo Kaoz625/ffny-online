@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdbool.h>
 #if defined(__APPLE__)
 /* [blz/mac] macOS has memset_s (C11 Annex K), not explicit_bzero. */
 #define __STDC_WANT_LIB_EXT1__ 1
@@ -450,9 +451,10 @@ static DWORD WINAPI sign_in_thread(LPVOID unused)
     snprintf(url, sizeof(url), ACCOUNT_URL "/auth/discord/start?login=%s", login);
 #if !defined(_WIN32)
     {
-        char cmd[MAX_PATH + 16];
-        int rc = snprintf(cmd, sizeof(cmd), "xdg-open '%s'", url);
-        if (rc <= 0 || system(cmd) != 0) {
+        /* [blz] SDL opens the browser on Linux, macOS and iOS alike (xdg-open is Linux only,
+         * and system() does not exist on iOS). */
+        extern bool SDL_OpenURL(const char *url);
+        if (!SDL_OpenURL(url)) {
             set_reason("The browser did not open.");
             set_state(ACCOUNT_FAILED);
             return 0;
